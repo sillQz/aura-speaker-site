@@ -61,34 +61,50 @@ function render(canvas,angle,spread,zoom,time,interactive=false){
 }
 const v=$('#viewer');let drag=false,startX=0,startYaw=0;v.addEventListener('pointerdown',e=>{drag=true;startX=e.clientX;startYaw=yaw;v.setPointerCapture(e.pointerId)});v.addEventListener('pointermove',e=>{if(drag){yaw=startYaw+(e.clientX-startX)*.012;$('#rotation').value=((yaw*180/Math.PI+180)%360+360)%360-180}});v.addEventListener('pointerup',()=>drag=false);v.addEventListener('pointercancel',()=>drag=false);v.addEventListener('keydown',e=>{if(e.key==='ArrowLeft'||e.key==='ArrowRight'){e.preventDefault();yaw+=(e.key==='ArrowLeft'?-.15:.15);$('#rotation').value=yaw*180/Math.PI}});$('#rotation').oninput=e=>yaw=+e.target.value*Math.PI/180;$('#reset').onclick=()=>{yaw=-.44;$('#rotation').value=-25;exploded=false;$('#explode').setAttribute('aria-pressed','false');$('#explode').textContent='Разобрать'};$('#explode').onclick=()=>{exploded=!exploded;$('#explode').setAttribute('aria-pressed',exploded);$('#explode').textContent=exploded?'Собрать':'Разобрать'};
 $('#volume').oninput=e=>{$('#volume-value').textContent=e.target.value+'%';if(gain)gain.gain.value=+e.target.value/100*.05};$('#mute').onclick=()=>{micOff=!micOff;$('#mute').setAttribute('aria-pressed',micOff);$('#mute').textContent=micOff?'Включить микрофон':'Отключить микрофон';chooseState(micOff?4:0);$('#control-info').textContent=micOff?'В демонстрации микрофон отключён. В реальном устройстве переключатель должен разрывать его питание.':'Микрофон включён в демонстрации интерфейса. Сайт не записывает звук.'};let audio,gain,osc=[],playing=false;$('#play').onclick=async()=>{if(!audio){audio=new (window.AudioContext||window.webkitAudioContext)();gain=audio.createGain();gain.connect(audio.destination)}if(playing){osc.forEach(o=>o.stop());osc=[];playing=false}else{await audio.resume();gain.gain.value=+$('#volume').value/100*.05;[220,277.18,329.63].forEach(f=>{let o=audio.createOscillator();o.type='sine';o.frequency.value=f;o.connect(gain);o.start();osc.push(o)});playing=true;setTimeout(()=>{if(playing){osc.forEach(o=>o.stop());osc=[];playing=false;$('#play').textContent='Воспроизвести демо';$('#play').setAttribute('aria-pressed','false')}},5000)}$('#play').textContent=playing?'Остановить демо':'Воспроизвести демо';$('#play').setAttribute('aria-pressed',playing)};
-// A single fixed stage crosses the hero and story. Scroll changes the scene,
-// never the canvas box: resizing or changing positioning mid-frame caused jumps.
+// Four matching product views share one fixed stage. A single normalized
+// timeline keeps the lid, camera angle and inner light in sync with scrolling.
 const stage=$('#model-stage'),story=$('#story');
 const clamp=(n,a=0,b=1)=>Math.min(b,Math.max(a,n));
 const smooth=n=>n*n*(3-2*n);
 const mix=(a,b,n)=>a+(b-a)*n;
-let scene={angle:-.5,spread:0,zoom:1},spreadValue=0,lastFrame=0,lastStoryLabel=-1;
+const phase=(n,a,b)=>smooth(clamp((n-a)/(b-a)));
+let scene={p:0,opacity:1},spreadValue=0,lastFrame=0,lastStoryLabel=-1;
 function sceneTarget(){
-  const y=scrollY,first=story.offsetTop,end=first+story.offsetHeight;
-  // Smooth overlapping chapters: form -> inner structure -> status light.
-  const progress=clamp((y-first+innerHeight*.42)/Math.max(1,story.offsetHeight-innerHeight*.5));
-  const opening=smooth(clamp(progress/.46)),closing=smooth(clamp((progress-.45)/.55));
-  const fade=smooth(clamp((end-y-innerHeight*.18)/(innerHeight*.72)));
-  const entrance=smooth(clamp((y+innerHeight*.35)/(innerHeight*.45)));
-  return {angle:-.5+(reduced?0:progress*2.25),spread:reduced?0:opening*(1-closing),zoom:1-.11*opening+.17*closing,opacity:Math.min(fade,entrance),progress};
+  const y=scrollY,end=story.offsetTop+story.offsetHeight;
+  const progress=clamp(y/Math.max(1,end-innerHeight*.55));
+  const fade=1-phase(y,end-innerHeight*.9,end-innerHeight*.12);
+  return {progress,opacity:fade};
 }
 function frame(t){
   requestAnimationFrame(frame);
-  if(document.hidden||t-lastFrame<32)return;
-  const dt=Math.min(64,t-lastFrame||32);lastFrame=t;
-  const target=sceneTarget(),ease=reduced?1:1-Math.exp(-dt/120);
-  scene.angle=mix(scene.angle,target.angle,ease);
-  scene.spread=mix(scene.spread,target.spread,ease);
-  scene.zoom=mix(scene.zoom,target.zoom,ease);
-  stage.style.opacity=target.opacity;
-  stage.style.visibility=target.opacity<.005?'hidden':'visible';
-  if(target.opacity>.005){stage.style.setProperty('--lift-neg',`${-scene.spread*38}px`);stage.style.setProperty('--lift-small',`${scene.spread*7}px`);stage.style.setProperty('--product-scale',scene.zoom);stage.style.setProperty('--rock-tilt',`${Math.sin(scene.angle)*1.5}deg`)}
-  const chapter=target.progress<.34?0:target.progress<.68?1:2;
+  if(document.hidden||t-lastFrame<16)return;
+  const dt=Math.min(64,t-lastFrame||16);lastFrame=t;
+  const target=sceneTarget(),ease=reduced?1:1-Math.exp(-dt/105);
+  scene.p=mix(scene.p,target.progress,ease);
+  scene.opacity=mix(scene.opacity,target.opacity,ease);
+  const p=scene.p,opening=reduced?0:phase(p,.12,.39),overhead=reduced?0:phase(p,.49,.82);
+  const lift=reduced?0:phase(p,.20,.63),spin=reduced?0:phase(p,.06,.66);
+  const set=(key,value)=>stage.style.setProperty(key,value);
+  set('--closed-opacity',(1-opening).toFixed(4));
+  set('--open-opacity',(opening*(1-overhead)).toFixed(4));
+  set('--dome-opacity',(opening*(1-phase(p,.59,.83))).toFixed(4));
+  set('--top-opacity',overhead.toFixed(4));
+  set('--lid-y',`${(-lift*innerHeight*.52).toFixed(1)}px`);
+  set('--lid-x',`${(lift*innerWidth*.045).toFixed(1)}px`);
+  set('--lid-roll',`${(lift*5).toFixed(2)}deg`);
+  set('--turn',`${(spin*11).toFixed(2)}deg`);
+  set('--tip',`${(phase(p,.38,.74)*9).toFixed(2)}deg`);
+  set('--top-spin',`${(phase(p,.55,.95)*-11).toFixed(2)}deg`);
+  set('--top-scale',(0.89+overhead*.12).toFixed(4));
+  set('--stage-scale',(1-phase(p,.15,.75)*.08+overhead*.07).toFixed(4));
+  set('--stage-x',`${(phase(p,.20,.56)*(innerWidth<650?0:innerWidth*.13)).toFixed(1)}px`);
+  set('--stage-glow',(0.6+overhead*.38).toFixed(3));
+  set('--ember-opacity',(0.1+overhead*.32).toFixed(3));
+  set('--ember-pulse',(reduced?1:.86+.14*Math.sin(t*.0017)+.04*Math.sin(t*.0041)).toFixed(3));
+  set('--ember-brightness',(reduced?1:1+.035*Math.sin(t*.0014)).toFixed(3));
+  stage.style.opacity=scene.opacity.toFixed(4);
+  stage.style.visibility=scene.opacity<.002?'hidden':'visible';
+  const chapter=p<.31?0:p<.68?1:2;
   if(chapter!==lastStoryLabel){$('.stage-label').textContent=['01 — СТЕКЛО И ОБСИДИАН','02 — КОМПОНОВКА','03 — ВНУТРЕННИЙ СВЕТ'][chapter];lastStoryLabel=chapter}
   spreadValue=mix(spreadValue,Number(exploded),ease);
   const rect=v.getBoundingClientRect();
